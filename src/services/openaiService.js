@@ -7,7 +7,7 @@ const MAX_PROMPT_CHARS = 20_000;
 // 'credit_balance_exhausted' se observó en la API real con una cuenta sin créditos.
 const QUOTA_CODES = new Set(['insufficient_quota', 'credit_balance_exhausted']);
 
-// Crea un error con el mismo formato que usa index.js: `status` HTTP y `publicMessage` seguro para el cliente.
+// Crea un error con el formato que entiende errorHandler (src/middlewares.js): `status` HTTP y `publicMessage` seguro.
 // Del error del SDK solo se guardan metadatos: su mensaje en un 401 incluye parte de la API key.
 function serviceError(status, publicMessage, sdkError) {
   const cause = sdkError && { status: sdkError.status, code: sdkError.code, requestID: sdkError.requestID };

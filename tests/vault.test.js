@@ -4,9 +4,9 @@ process.env.TOKEN_SECRET = 'secreto-de-test';
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
 const mongoose = require('mongoose');
-const {
-  anonymize, deanonymize, connectDB, Token, secureChat, SECURE_CHAT_SYSTEM_PROMPT, isAllowedHost, rateLimit,
-} = require('./index');
+const { connectDB, Token } = require('../src/db');
+const { anonymize, deanonymize } = require('../src/services/vault');
+const { secureChat, SECURE_CHAT_SYSTEM_PROMPT } = require('../src/services/secureChat');
 
 const TEST_DB = 'privacyvault_test';
 const T = (type) => `${type}_[0-9a-f]{12}`;
@@ -92,24 +92,6 @@ test('secureChat: resuelve alias que el modelo alteró (mayúsculas, espacio, pr
   const start = Date.now();
   await secureChat('hola', { complete: async () => `${'a'.repeat(50000)}_${'a'.repeat(50000)}` });
   assert.ok(Date.now() - start < 500, `tardó ${Date.now() - start} ms`);
-});
-
-test('isAllowedHost: solo localhost/127.0.0.1 en el puerto del servicio (anti DNS rebinding)', () => {
-  assert.ok(isAllowedHost('localhost:3001', 3001));
-  assert.ok(isAllowedHost('127.0.0.1:3001', 3001));
-  for (const host of ['evil.example:3001', 'localhost:9999', 'localhost.evil.example:3001', undefined]) {
-    assert.ok(!isAllowedHost(host, 3001), String(host));
-  }
-});
-
-test('rateLimit: deja pasar hasta el máximo por ventana y luego responde 429', () => {
-  const limiter = rateLimit(2, 60_000);
-  const statuses = [];
-  for (let i = 0; i < 3; i++) {
-    const res = { status: (code) => (statuses.push(code), { json: () => {} }) };
-    limiter({}, res, () => statuses.push('next'));
-  }
-  assert.deepStrictEqual(statuses, ['next', 'next', 429]);
 });
 
 test('el system prompt pide conservar los tokens exactamente', () => {

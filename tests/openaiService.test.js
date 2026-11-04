@@ -1,7 +1,7 @@
 // Tests sin red: un fetch falso simula las respuestas HTTP de OpenAI y el SDK real las convierte en sus errores.
 const { test } = require('node:test');
 const assert = require('node:assert');
-const OpenAIService = require('./openaiService');
+const OpenAIService = require('../src/services/openaiService');
 
 const json = (status, body) =>
   Promise.resolve(new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } }));
