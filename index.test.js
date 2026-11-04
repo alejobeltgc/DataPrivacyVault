@@ -4,7 +4,9 @@ process.env.TOKEN_SECRET = 'secreto-de-test';
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
 const mongoose = require('mongoose');
-const { anonymize, deanonymize, connectDB, Token } = require('./index');
+const {
+  anonymize, deanonymize, connectDB, Token, secureChat, SECURE_CHAT_SYSTEM_PROMPT, isAllowedHost, rateLimit,
+} = require('./index');
 
 const TEST_DB = 'privacyvault_test';
 const T = (type) => `${type}_[0-9a-f]{12}`;
@@ -25,6 +27,95 @@ test('más de 200 datos distintos en un mensaje -> 413 y no se guarda nada', asy
   const msg = Array.from({ length: 201 }, (_, i) => `u${i}@correo.co`).join(' ');
   await assert.rejects(anonymize(msg), (err) => err.status === 413 && /200/.test(err.publicMessage));
   assert.strictEqual(await Token.countDocuments({ value: 'u0@correo.co' }), 0);
+});
+
+test('secureChat: la PII nunca llega a OpenAI y la respuesta vuelve desanonimizada', async () => {
+  const sent = {};
+  // OpenAI falso: guarda lo que recibe y responde usando los tokens tal como llegaron.
+  const fakeOpenAI = {
+    complete: async (prompt, systemPrompt) => {
+      Object.assign(sent, { prompt, systemPrompt });
+      const [name, email] = prompt.match(/(?:NAME|EMAIL)_[0-9a-f]{12}/g);
+      return `Listo: le escribiré a ${name} al correo ${email}.`;
+    },
+  };
+  const result = await secureChat('Redacta un saludo para Carlos Mendoza, su email es cmendoza@example.com y su teléfono 3001234567', fakeOpenAI);
+
+  for (const pii of ['Carlos', 'Mendoza', 'cmendoza@example.com', '3001234567']) {
+    assert.ok(!sent.prompt.includes(pii), `la PII "${pii}" llegó a OpenAI`);
+  }
+  assert.strictEqual(sent.systemPrompt, SECURE_CHAT_SYSTEM_PROMPT);
+  assert.strictEqual(result.anonymizedPrompt, sent.prompt);
+  assert.strictEqual(result.response, 'Listo: le escribiré a Carlos Mendoza al correo cmendoza@example.com.');
+});
+
+// OpenAI falso que devuelve el prompt tal cual: así se ve exactamente qué recibió y qué se desanonimiza.
+const echoOpenAI = (sent = []) => ({ complete: async (prompt) => (sent.push(prompt), prompt) });
+
+test('secureChat: un nombre al inicio del prompt tampoco sale hacia OpenAI', async () => {
+  const sent = [];
+  const prompt = 'Carlos Mendoza me pidió un saludo. ¿Ana Gómez puede llamarlo?';
+  const result = await secureChat(prompt, echoOpenAI(sent));
+  for (const pii of ['Carlos', 'Mendoza', 'Ana', 'Gómez']) assert.ok(!sent[0].includes(pii), pii);
+  assert.strictEqual(result.response, prompt);
+});
+
+test('secureChat: OpenAI recibe alias nuevos en cada petición (no puede enlazar a la persona)', async () => {
+  const sent = [];
+  const fake = echoOpenAI(sent);
+  await secureChat('saluda a Carlos Mendoza', fake);
+  await secureChat('saluda a Carlos Mendoza', fake);
+  const vaultToken = (await anonymize('saluda a Carlos Mendoza')).slice('saluda a '.length);
+  assert.notStrictEqual(sent[0], sent[1]);
+  assert.ok(!sent[0].includes(vaultToken) && !sent[1].includes(vaultToken), 'el token del vault no debe salir');
+});
+
+test('secureChat: un token de OTRA persona en la respuesta no se desanonimiza', async () => {
+  const otherToken = (await anonymize('de Ana Gómez')).slice('de '.length); // existe en el vault
+  const fake = { complete: async () => `Te paso el dato: ${otherToken}` };
+  const { response } = await secureChat('saluda a Carlos Mendoza', fake);
+  assert.strictEqual(response, `Te paso el dato: ${otherToken}`);
+});
+
+test('secureChat: resuelve alias que el modelo alteró (mayúsculas, espacio, prefijo traducido)', async () => {
+  const alterations = [
+    (a) => a.toLowerCase(),
+    (a) => a.replace(/_(\w+)/, (m, hex) => `_${hex.toUpperCase()}`),
+    (a) => a.replace('_', '_ '),
+    (a) => a.replace('NAME', 'NOMBRE'),
+  ];
+  for (const alter of alterations) {
+    const fake = { complete: async (p) => `Hola ${alter(p.match(/NAME_[0-9a-f]{12}/)[0])}!` };
+    assert.strictEqual((await secureChat('saluda a Carlos Mendoza', fake)).response, 'Hola Carlos Mendoza!', alter.toString());
+  }
+  // Una respuesta larga y rara no debe bloquear al resolver alias (el ReDoS original tardaba ~4 s).
+  const start = Date.now();
+  await secureChat('hola', { complete: async () => `${'a'.repeat(50000)}_${'a'.repeat(50000)}` });
+  assert.ok(Date.now() - start < 500, `tardó ${Date.now() - start} ms`);
+});
+
+test('isAllowedHost: solo localhost/127.0.0.1 en el puerto del servicio (anti DNS rebinding)', () => {
+  assert.ok(isAllowedHost('localhost:3001', 3001));
+  assert.ok(isAllowedHost('127.0.0.1:3001', 3001));
+  for (const host of ['evil.example:3001', 'localhost:9999', 'localhost.evil.example:3001', undefined]) {
+    assert.ok(!isAllowedHost(host, 3001), String(host));
+  }
+});
+
+test('rateLimit: deja pasar hasta el máximo por ventana y luego responde 429', () => {
+  const limiter = rateLimit(2, 60_000);
+  const statuses = [];
+  for (let i = 0; i < 3; i++) {
+    const res = { status: (code) => (statuses.push(code), { json: () => {} }) };
+    limiter({}, res, () => statuses.push('next'));
+  }
+  assert.deepStrictEqual(statuses, ['next', 'next', 429]);
+});
+
+test('el system prompt pide conservar los tokens exactamente', () => {
+  for (const word of ['NAME_', 'EMAIL_', 'PHONE_', 'exactamente', 'traduzcas']) {
+    assert.ok(SECURE_CHAT_SYSTEM_PROMPT.includes(word), word);
+  }
 });
 
 test('connectDB sin MONGODB_URI da un error claro', async () => {
@@ -65,6 +156,13 @@ test('deanonymize reporta los tokens desconocidos (sin repetir)', async () => {
   const { unknown } = await deanonymize(`${known} NAME_000000000000 NAME_000000000000`);
   assert.deepStrictEqual(unknown, ['NAME_000000000000']);
   assert.deepStrictEqual((await deanonymize('sin tokens')).unknown, []);
+});
+
+test('un nombre de 2+ palabras al inicio de mensaje o de frase sí se tokeniza', async () => {
+  assert.match(
+    await anonymize('Carlos Mendoza pidió info. ¿Ana Gómez también?'),
+    new RegExp(`^${T('NAME')} pidió info\\. ¿${T('NAME')} también\\?$`)
+  );
 });
 
 test('la palabra al inicio de mensaje o de frase no se tokeniza', async () => {
