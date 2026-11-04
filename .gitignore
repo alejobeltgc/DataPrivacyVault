@@ -1,4 +1,34 @@
+# Dependencias: se reinstalan con `npm ci` desde package-lock.json (que SÍ se sube)
 node_modules/
+
+# Secretos: .env y cualquier variante (.env.local, .env.production, .env.test…).
+# Solo se sube la plantilla sin valores.
 .env
+.env.*
+!.env.example
+
+# Llaves y certificados: nunca van en el repositorio
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Logs y diagnósticos de npm/Node
+logs/
+*.log
+npm-debug.log*
+
+# Cobertura de tests (si se activa)
+coverage/
+
+# Archivos del sistema operativo
 .DS_Store
+Thumbs.db
+
+# Configuración de editores
+.vscode/
+.idea/
+*.swp
+
+# Configuración local de Claude Code (agentes, skills): es personal, no del proyecto
 .claude/
