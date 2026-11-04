@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "express": "^5.3.0",
-    "mongoose": "^9.11.4"
+    "mongoose": "^9.11.4",
+    "openai": "7.39.0"
   }
 }
