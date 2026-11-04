@@ -14,7 +14,7 @@ Así, por ejemplo, ChatGPT redacta un correo para `NAME_c2192b5767a4` y el clien
 
 ## Arquitectura
 
-Un solo servicio Express (`index.js`) con tres endpoints, MongoDB Atlas como vault y la clase `OpenAIService` (`openaiService.js`) para ChatGPT.
+Un servicio Express con tres endpoints, MongoDB Atlas como vault y la clase `OpenAIService` para ChatGPT. El código está separado en tres capas: web (`src/routes.js`), lógica (`src/services/`, sin HTTP) y datos (`src/db.js`). Ver [Estructura](#estructura).
 
 Flujo de `POST /secureChatGPT`:
 
@@ -155,9 +155,22 @@ Todos los errores responden `{"error": "..."}` con un mensaje claro y sin detall
 ## Estructura
 
 ```
-index.js                 servicio Express: detección, vault (MongoDB) y endpoints
-openaiService.js         clase OpenAIService (chat completions y manejo de errores)
-index.test.js            tests del vault y de /secureChatGPT (usa privacyvault_test)
-openaiService.test.js    tests de OpenAIService, sin red
-.env.example             plantilla de variables de entorno
+server.js                    punto de entrada: conecta a MongoDB y abre el puerto
+src/
+  app.js                     arma Express: guarda de Host → JSON → rutas → errores
+  config.js                  variables de entorno, validadas al arrancar
+  db.js                      capa de datos: conexión a MongoDB y modelo Token
+  routes.js                  capa web: los 3 endpoints (validan el input y delegan)
+  middlewares.js             hostGuard, rateLimit y errorHandler
+  services/                  lógica de negocio, sin dependencias de HTTP
+    pii.js                   detección de PII (regex) y tokens HMAC
+    vault.js                 anonymize / deanonymize
+    secureChat.js            anonimizar → OpenAI → desanonimizar
+    openaiService.js         cliente de OpenAI (chat completions y errores)
+tests/
+  vault.test.js              vault y /secureChatGPT (usa la base privacyvault_test)
+  middlewares.test.js        Host y rate limit, sin red
+  openaiService.test.js      OpenAIService, sin red
+evidencias/run-tests.sh      ejecuta los curl y genera evidencias/resultados.md
+.env.example                 plantilla de variables de entorno
 ```
